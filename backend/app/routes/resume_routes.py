@@ -293,3 +293,146 @@ def get_parsed_resume(
 
     return ParsedResumeResponse(parsedResume=parsed_data)
 
+
+# ---------------------------------------------------------------------------
+# POST /api/resumes/{resume_id}/tailor (Tailor Resume with AI Rules)
+# ---------------------------------------------------------------------------
+@router.post(
+    "/{resume_id}/tailor",
+    response_model=dict,  # Dict format since response has custom nested schemas
+    summary="Tailor a resume dynamically to match a Job Description using AI rules",
+)
+def tailor_resume_endpoint(
+    resume_id: int,
+    payload: dict,  # Avoid direct pydantic type-checks on routing for dynamic flexibility
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Scans a resume's parsed data, extracts matching Job Description keywords,
+    re-writes bullet points, boosts relevant tech skills, and generates
+    a downloadable Jake's style LaTeX code.
+    """
+    from app.schemas.tailor_schema import TailorRequest, TailorResponse
+    from app.utils.tailor_engine import tailor_resume_data, generate_latex_code
+    from app.models.job import Job
+
+    # 1 — Fetch target resume
+    resume = (
+        db.query(Resume)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resume not found.",
+        )
+
+    # 2 — Ensure we have parsed data
+    if not resume.parsed_data:
+        try:
+            resume.parsed_data = parse_resume(resume.extracted_text or "")
+            db.commit()
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Parsed data missing and auto-parse failed: {e}",
+            )
+
+    # 3 — Extract target job description
+    job_id = payload.get("jobId")
+    job_desc = payload.get("jobDescription") or ""
+    job_title = "Target Position"
+
+    if job_id:
+        job = db.query(Job).filter(Job.id == job_id, Job.user_id == current_user.id).first()
+        if job:
+            job_desc = job.description or ""
+            job_title = job.title or "Target Position"
+
+    if not job_desc.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please provide either a valid jobId or a jobDescription text.",
+        )
+
+    # 4 — Run AI Tailoring Engine
+    tailored = tailor_resume_data(resume.parsed_data, job_desc, job_title)
+    latex_code = generate_latex_code(tailored)
+
+    return {
+        "message": "Resume tailored successfully!",
+        "tailoredData": tailored,
+        "latexCode": latex_code,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/resumes/{resume_id}/tailor/save (Save Tailored Resume)
+# ---------------------------------------------------------------------------
+@router.post(
+    "/{resume_id}/tailor/save",
+    summary="Save a tailored resume as a new resume record",
+)
+def save_tailored_resume_endpoint(
+    resume_id: int,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Saves a tailored, customized resume as a brand new resume record
+    in the candidate's cockpit list.
+    """
+    # 1 — Fetch original resume
+    orig = (
+        db.query(Resume)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .first()
+    )
+    if not orig:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Original resume not found.",
+        )
+
+    # 2 — Construct flat indexing text for search/ATS parsing
+    name = payload.get("name") or "Your Name"
+    email = payload.get("email") or ""
+    phone = payload.get("phone") or ""
+    skills = ", ".join(payload.get("skills") or [])
+    
+    text_parts = [name, email, phone, skills]
+    
+    for exp in payload.get("experience") or []:
+        role = exp.get("role") or ""
+        company = exp.get("company") or ""
+        text_parts.append(f"{role} at {company}")
+        text_parts.extend(exp.get("bullets") or [])
+        
+    for proj in payload.get("projects") or []:
+        pname = proj.get("name") or ""
+        pdesc = proj.get("description") or ""
+        text_parts.append(f"Project: {pname} - {pdesc}")
+
+    tailored_text = "\n".join(text_parts)
+
+    # 3 — Insert new Resume record
+    new_resume = Resume(
+        user_id=current_user.id,
+        filename=f"Tailored_{orig.filename}",
+        file_path=orig.file_path,  # Link to same file
+        extracted_text=tailored_text,
+        parsed_data=payload,
+    )
+    db.add(new_resume)
+    db.commit()
+    db.refresh(new_resume)
+
+    return {
+        "message": "Tailored resume saved successfully as a new record!",
+        "resumeId": new_resume.id,
+    }
+
+

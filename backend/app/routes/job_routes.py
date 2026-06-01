@@ -179,3 +179,39 @@ def delete_job(
     db.commit()
 
     return {"message": "Job deleted successfully"}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/jobs/discover (Daily Discovery & Aggregation Engine)
+# ---------------------------------------------------------------------------
+@router.get(
+    "/discover/search",
+    summary="Discover dynamic daily internship and job postings from LinkedIn, Indeed, and Naukri",
+)
+def discover_jobs_endpoint(
+    title: str = "",
+    mode: str = "all",
+    type: str = "all",
+    source: str = "all",
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Real-time discovery crawler aggregating new internship and job postings
+    daily from LinkedIn, Indeed, and Naukri. Filters by job mode (remote, hybrid, onsite)
+    and job type (internship, fulltime).
+    """
+    from app.utils.job_aggregator import get_daily_discovered_jobs
+
+    sources_list = ["linkedin", "indeed", "naukri"]
+    if source != "all":
+        sources_list = [s.strip() for s in source.split(",") if s.strip()]
+
+    discovered = get_daily_discovered_jobs(
+        title=title,
+        mode=mode,
+        position_type=type,
+        sources=sources_list,
+    )
+
+    return {"jobs": discovered}
+
