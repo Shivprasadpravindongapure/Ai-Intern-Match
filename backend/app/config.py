@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    USE_SEMANTIC_AI: bool = False
+    SEMANTIC_SERVICE_URL: str = "http://localhost:8001"
+    GITHUB_TOKEN: str | None = None
+    AUTO_REFRESH_PROFILES: bool = True
 
     model_config = {
         # Point to the .env that sits in the backend/ directory
