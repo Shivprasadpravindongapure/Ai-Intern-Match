@@ -8,6 +8,7 @@ export interface User {
   id: number;
   full_name: string;
   email: string;
+  is_verified: boolean;
   created_at: string;
 }
 
@@ -16,6 +17,8 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (fullName: string, email: string, password: string) => Promise<void>;
+  verifyOtp: (email: string, otpCode: string) => Promise<void>;
+  resendOtp: (email: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -30,10 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const restoreSession = async () => {
       const token = getToken();
-      if (!token) {
-        setLoading(false);
-        return;
-      }
+      if (!token) { setLoading(false); return; }
       try {
         const res = await API.get('/auth/me');
         setUser(res.data);
@@ -46,19 +46,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     restoreSession();
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await API.post('/auth/login', { email, password });
+  const signup = useCallback(async (fullName: string, email: string, password: string) => {
+    await API.post('/auth/signup', { full_name: fullName, email, password });
+  }, []);
+
+  const verifyOtp = useCallback(async (email: string, otpCode: string) => {
+    const res = await API.post('/auth/verify-otp', { email, otp_code: otpCode });
     const { access_token, user: userData } = res.data;
     setToken(access_token);
     setUser(userData);
   }, []);
 
-  const signup = useCallback(async (fullName: string, email: string, password: string) => {
-    await API.post('/auth/signup', {
-      full_name: fullName,
-      email,
-      password,
-    });
+  const resendOtp = useCallback(async (email: string) => {
+    await API.post('/auth/resend-otp', { email });
+  }, []);
+
+  const login = useCallback(async (email: string, password: string) => {
+    const res = await API.post('/auth/login', { email, password });
+    const { access_token, user: userData } = res.data;
+    setToken(access_token);
+    setUser(userData);
   }, []);
 
   const logout = useCallback(() => {
@@ -68,7 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, verifyOtp, resendOtp, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -76,8 +83,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 }

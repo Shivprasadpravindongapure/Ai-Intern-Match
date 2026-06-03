@@ -1,60 +1,39 @@
 """
-resume.py — SQLAlchemy Resume Model for SkillProof AI
+resume.py — Resume SQLAlchemy Model for SkillProof AI
 
-Maps the `resumes` table used to store uploaded résumés and their
-extracted text content.
+Stores uploaded PDF resumes, extracted text, parsed structured data,
+and AI-generated analysis fields (Gemini AI score, suggestions, ATS keywords).
 """
 
 from datetime import datetime
-
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, JSON
-from sqlalchemy.orm import relationship
-
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.types import JSON
 from app.database import Base
 
 
 class Resume(Base):
-    """
-    Represents an uploaded résumé in the SkillProof AI platform.
-
-    Columns:
-        id:             Auto-incrementing primary key.
-        user_id:        Foreign key linking to the owning user.
-        filename:       Original name of the uploaded file (max 255 chars).
-        file_path:      Server-side path where the file is stored (max 500 chars).
-        extracted_text: Full text extracted from the PDF via PyPDF2.
-        parsed_data:    Cached parsed structured resume data (JSON).
-        created_at:     Timestamp set automatically when the row is created.
-    """
-
     __tablename__ = "resumes"
 
-    id: int = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id: int = Column(
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
-    filename: str = Column(String(255), nullable=False)
-    file_path: str = Column(String(500), nullable=False)
-    extracted_text: str = Column(Text, nullable=True)
-    parsed_data: dict = Column(JSON, nullable=True)
-    ats_score: int = Column(Integer, nullable=True)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow)
-    updated_at: datetime = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-    )
+    filename = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
 
-    # --- Relationships ---
-    user = relationship("User", back_populates="resumes")
-    match_results = relationship(
-        "MatchResult",
-        back_populates="resume",
-        cascade="all, delete-orphan",
-    )
+    # ── Extracted & Parsed Content ─────────────────────────────────────────
+    extracted_text = Column(Text, nullable=True)
+    parsed_data = Column(JSON, nullable=True)
 
-    def __repr__(self) -> str:
-        """Developer-friendly representation of a Resume row."""
-        return f"<Resume id={self.id} filename={self.filename!r}>"
+    # ── AI Analysis (Gemini) ───────────────────────────────────────────────
+    ai_suggestions = Column(JSON, nullable=True)   # Full Gemini analysis result
+    ats_keywords = Column(JSON, nullable=True)      # Extracted ATS keywords list
+    ai_score = Column(Integer, nullable=True)       # 0-100 AI quality score
+    ats_score = Column(Integer, nullable=True)      # Computed ATS match score
+
+    # ── Timestamps ─────────────────────────────────────────────────────────
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

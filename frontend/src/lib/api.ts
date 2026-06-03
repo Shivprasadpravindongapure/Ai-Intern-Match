@@ -1,10 +1,12 @@
 import axios from 'axios';
+import { removeToken } from './api';
 
 const API = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  timeout: 30000,
 });
 
-// Request interceptor to attach the auth token
+// Request interceptor: attach JWT
 API.interceptors.request.use(
   (config) => {
     if (typeof window !== 'undefined') {
@@ -16,6 +18,18 @@ API.interceptors.request.use(
     return config;
   },
   (error) => Promise.reject(error)
+);
+
+// Response interceptor: auto-logout on 401
+API.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      removeToken();
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
 );
 
 export default API;

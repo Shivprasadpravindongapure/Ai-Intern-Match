@@ -65,9 +65,11 @@ class UserResponse(BaseModel):
     id: int
     full_name: str
     email: str
+    is_verified: bool = False
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
 
 
 class TokenResponse(BaseModel):

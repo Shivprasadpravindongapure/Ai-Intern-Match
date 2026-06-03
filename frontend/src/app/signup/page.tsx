@@ -1,270 +1,286 @@
 'use client';
 
-import React, { useState, FormEvent } from 'react';
+import React, { useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 
-/* ─── Floating Orb ─── */
-function FloatingOrb({
-  className,
-  style,
-}: {
-  className?: string;
-  style?: React.CSSProperties;
-}) {
+/* ── Password strength calculator ── */
+function getPasswordStrength(password: string): { score: number; label: string; color: string } {
+  let score = 0;
+  if (password.length >= 8) score++;
+  if (password.length >= 12) score++;
+  if (/[A-Z]/.test(password)) score++;
+  if (/[0-9]/.test(password)) score++;
+  if (/[^A-Za-z0-9]/.test(password)) score++;
+  const labels = ['', 'Weak', 'Fair', 'Good', 'Strong', 'Very Strong'];
+  const colors = ['', '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4'];
+  return { score, label: labels[score] || '', color: colors[score] || '' };
+}
+
+/* ── OTP Input (6 boxes) ── */
+function OtpInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const refs = Array.from({ length: 6 }, () => useRef<HTMLInputElement>(null));
+  const digits = value.padEnd(6, '').split('').slice(0, 6);
+
+  const handleChange = (i: number, v: string) => {
+    const d = v.replace(/\D/g, '').slice(-1);
+    const arr = digits.map((x) => x);
+    arr[i] = d;
+    onChange(arr.join(''));
+    if (d && i < 5) refs[i + 1].current?.focus();
+  };
+
+  const handleKeyDown = (i: number, e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && !digits[i] && i > 0) refs[i - 1].current?.focus();
+  };
+
   return (
-    <div
-      className={`absolute rounded-full opacity-20 blur-3xl pointer-events-none ${className ?? ''}`}
-      style={style}
-      aria-hidden
-    />
+    <div className="flex gap-3 justify-center">
+      {digits.map((d, i) => (
+        <input
+          key={i}
+          ref={refs[i]}
+          type="text"
+          inputMode="numeric"
+          maxLength={1}
+          value={d}
+          onChange={(e) => handleChange(i, e.target.value)}
+          onKeyDown={(e) => handleKeyDown(i, e)}
+          className="w-12 h-14 text-center text-2xl font-bold rounded-xl border-2 bg-white/5 text-white
+                     border-white/20 focus:border-purple-500 focus:outline-none focus:bg-white/10
+                     transition-all duration-200 caret-transparent"
+        />
+      ))}
+    </div>
   );
 }
 
-/* ─── Eye Icons ─── */
-function EyeIcon() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-  );
-}
-
-function EyeSlashIcon() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-    </svg>
-  );
-}
-
-/* ─── Page ─── */
 export default function SignupPage() {
-  const { signup } = useAuth();
+  const { signup, verifyOtp, resendOtp } = useAuth();
   const router = useRouter();
 
-  const [fullName, setFullName] = useState('');
+  const [step, setStep] = useState(1);
   const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
 
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [apiError, setApiError] = useState('');
-  const [success, setSuccess] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const strength = getPasswordStrength(password);
 
-  /* ── Client Validation ── */
-  function validate(): boolean {
-    const next: Record<string, string> = {};
+  /* ── Resend OTP cooldown timer ── */
+  const startCooldown = () => {
+    setResendCooldown(60);
+    const t = setInterval(() => {
+      setResendCooldown((c) => {
+        if (c <= 1) { clearInterval(t); return 0; }
+        return c - 1;
+      });
+    }, 1000);
+  };
 
-    if (!fullName.trim() || fullName.trim().length < 2)
-      next.fullName = 'Full name must be at least 2 characters';
-
-    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!email.trim()) next.email = 'Email is required';
-    else if (!emailRe.test(email)) next.email = 'Enter a valid email address';
-
-    if (!password) next.password = 'Password is required';
-    else if (password.length < 6)
-      next.password = 'Password must be at least 6 characters';
-
-    if (password !== confirmPassword)
-      next.confirmPassword = 'Passwords do not match';
-
-    setErrors(next);
-    return Object.keys(next).length === 0;
-  }
-
-  /* ── Submit ── */
-  async function handleSubmit(e: FormEvent) {
+  /* ── Step 1: Signup ── */
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    setApiError('');
-    if (!validate()) return;
+    setError('');
+    if (!fullName.trim()) return setError('Full name is required.');
+    if (!email.includes('@')) return setError('Enter a valid email address.');
+    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    if (password !== confirmPassword) return setError('Passwords do not match.');
 
-    setSubmitting(true);
+    setLoading(true);
     try {
-      await signup(fullName.trim(), email.trim(), password);
-      setSuccess(true);
-      setTimeout(() => router.push('/login'), 1500);
+      await signup(fullName, email, password);
+      startCooldown();
+      setStep(2);
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail ?? 'Something went wrong. Please try again.';
-      setApiError(msg);
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(msg || 'Signup failed. Please try again.');
     } finally {
-      setSubmitting(false);
+      setLoading(false);
     }
-  }
+  };
+
+  /* ── Step 2: Verify OTP ── */
+  const handleVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (otp.length < 6) return setError('Please enter the complete 6-digit OTP.');
+
+    setLoading(true);
+    try {
+      await verifyOtp(email, otp);
+      router.push('/dashboard');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(msg || 'Invalid OTP. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* ── Resend OTP ── */
+  const handleResend = async () => {
+    if (resendCooldown > 0) return;
+    setError('');
+    try {
+      await resendOtp(email);
+      startCooldown();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(msg || 'Failed to resend OTP.');
+    }
+  };
 
   return (
-    <div className="relative flex min-h-[calc(100vh-64px)] items-center justify-center px-4 py-12 bg-grid-pattern">
-      {/* Floating orbs */}
-      <FloatingOrb
-        className="animate-float-slow"
-        style={{
-          width: 400,
-          height: 400,
-          top: '-10%',
-          right: '-5%',
-          background: 'radial-gradient(circle, rgba(124,58,237,0.3), transparent 70%)',
-        }}
-      />
-      <FloatingOrb
-        className="animate-float"
-        style={{
-          width: 300,
-          height: 300,
-          bottom: '0%',
-          left: '-5%',
-          background: 'radial-gradient(circle, rgba(37,99,235,0.25), transparent 70%)',
-        }}
-      />
+    <div className="relative min-h-screen flex items-center justify-center px-4 bg-grid-pattern overflow-hidden">
+      {/* Background orbs */}
+      <div className="absolute w-[500px] h-[500px] rounded-full opacity-20 blur-3xl pointer-events-none"
+        style={{ top: '-10%', left: '-10%', background: 'radial-gradient(circle, rgba(124,58,237,0.4), transparent 70%)' }} />
+      <div className="absolute w-[400px] h-[400px] rounded-full opacity-15 blur-3xl pointer-events-none"
+        style={{ bottom: '-10%', right: '-5%', background: 'radial-gradient(circle, rgba(37,99,235,0.35), transparent 70%)' }} />
 
-      {/* Card */}
-      <div className="relative z-10 w-full max-w-md glass-strong rounded-2xl p-8 sm:p-10 glow-purple">
-        {/* Header */}
-        <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold gradient-text mb-2">Create Account</h1>
-          <p className="text-slate-400 text-sm">Join SkillProof AI and launch your career</p>
+      <div className="relative w-full max-w-md z-10">
+        {/* Step Indicator */}
+        <div className="flex items-center justify-center gap-3 mb-8">
+          {[1, 2].map((s) => (
+            <React.Fragment key={s}>
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-300
+                ${step >= s ? 'bg-gradient-to-br from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-500/30'
+                  : 'bg-white/5 text-slate-500 border border-white/10'}`}>
+                {step > s ? '✓' : s}
+              </div>
+              {s < 2 && (
+                <div className={`h-0.5 w-16 rounded transition-all duration-500
+                  ${step > s ? 'bg-gradient-to-r from-purple-600 to-blue-600' : 'bg-white/10'}`} />
+              )}
+            </React.Fragment>
+          ))}
         </div>
 
-        {/* Success toast */}
-        {success && (
-          <div className="mb-6 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-sm text-emerald-400 text-center">
-            🎉 Account created! Redirecting to login…
-          </div>
-        )}
-
-        {/* API error */}
-        {apiError && (
-          <div className="mb-6 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400 text-center">
-            {apiError}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-          {/* Full Name */}
-          <div>
-            <label htmlFor="fullName" className="mb-1.5 block text-sm font-medium text-slate-300">
-              Full Name
-            </label>
-            <input
-              id="fullName"
-              type="text"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="John Doe"
-              className="input-dark w-full rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-slate-500"
-            />
-            {errors.fullName && (
-              <p className="mt-1 text-xs text-red-400">{errors.fullName}</p>
-            )}
+        <div className="glass-strong rounded-2xl p-8 glow-purple">
+          {/* Brand */}
+          <div className="text-center mb-8">
+            <span className="text-4xl">🧠</span>
+            <h1 className="mt-2 text-2xl font-bold text-white">
+              {step === 1 ? 'Create Account' : 'Verify Email'}
+            </h1>
+            <p className="mt-1 text-sm text-slate-400">
+              {step === 1
+                ? 'Join thousands of job seekers powered by AI'
+                : `We sent a 6-digit code to ${email}`}
+            </p>
           </div>
 
-          {/* Email */}
-          <div>
-            <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-slate-300">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="input-dark w-full rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-slate-500"
-            />
-            {errors.email && (
-              <p className="mt-1 text-xs text-red-400">{errors.email}</p>
-            )}
-          </div>
-
-          {/* Password */}
-          <div>
-            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-slate-300">
-              Password
-            </label>
-            <div className="relative">
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="input-dark w-full rounded-lg px-4 py-2.5 pr-10 text-sm text-white placeholder:text-slate-500"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
-                {showPassword ? <EyeSlashIcon /> : <EyeIcon />}
-              </button>
+          {/* Error */}
+          {error && (
+            <div className="mb-5 rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400">
+              {error}
             </div>
-            {errors.password && (
-              <p className="mt-1 text-xs text-red-400">{errors.password}</p>
-            )}
-          </div>
+          )}
 
-          {/* Confirm Password */}
-          <div>
-            <label htmlFor="confirmPassword" className="mb-1.5 block text-sm font-medium text-slate-300">
-              Confirm Password
-            </label>
-            <div className="relative">
-              <input
-                id="confirmPassword"
-                type={showConfirm ? 'text' : 'password'}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="••••••••"
-                className="input-dark w-full rounded-lg px-4 py-2.5 pr-10 text-sm text-white placeholder:text-slate-500"
-              />
-              <button
-                type="button"
-                onClick={() => setShowConfirm(!showConfirm)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
-                aria-label={showConfirm ? 'Hide password' : 'Show password'}
-              >
-                {showConfirm ? <EyeSlashIcon /> : <EyeIcon />}
+          {/* ── STEP 1: Account Details ── */}
+          {step === 1 && (
+            <form onSubmit={handleSignup} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">Full Name</label>
+                <input
+                  type="text" value={fullName} onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Prasad Dongapure"
+                  className="input-dark w-full rounded-xl px-4 py-3 text-white text-sm placeholder:text-slate-600"
+                  required autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">Email Address</label>
+                <input
+                  type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@gmail.com"
+                  className="input-dark w-full rounded-xl px-4 py-3 text-white text-sm placeholder:text-slate-600"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">Password</label>
+                <input
+                  type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Minimum 8 characters"
+                  className="input-dark w-full rounded-xl px-4 py-3 text-white text-sm placeholder:text-slate-600"
+                  required
+                />
+                {password && (
+                  <div className="mt-2">
+                    <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{ width: `${(strength.score / 5) * 100}%`, backgroundColor: strength.color }}
+                      />
+                    </div>
+                    <p className="text-xs mt-1" style={{ color: strength.color }}>{strength.label}</p>
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">Confirm Password</label>
+                <input
+                  type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat your password"
+                  className={`input-dark w-full rounded-xl px-4 py-3 text-white text-sm placeholder:text-slate-600
+                    ${confirmPassword && confirmPassword !== password ? 'border-red-500/50' : ''}`}
+                  required
+                />
+              </div>
+              <button type="submit" disabled={loading}
+                className="btn-gradient w-full rounded-xl py-3.5 text-sm font-semibold text-white mt-2
+                           disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                {loading ? (
+                  <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Creating Account...</>
+                ) : 'Continue →'}
               </button>
-            </div>
-            {errors.confirmPassword && (
-              <p className="mt-1 text-xs text-red-400">{errors.confirmPassword}</p>
-            )}
-          </div>
+            </form>
+          )}
 
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={submitting || success}
-            className="btn-gradient w-full rounded-lg py-3 text-sm font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
-          >
-            {submitting ? (
-              <>
-                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                </svg>
-                Creating Account…
-              </>
-            ) : (
-              'Create Account'
-            )}
-          </button>
-        </form>
+          {/* ── STEP 2: OTP Verification ── */}
+          {step === 2 && (
+            <form onSubmit={handleVerify} className="space-y-6">
+              <OtpInput value={otp} onChange={setOtp} />
+              <button type="submit" disabled={loading || otp.length < 6}
+                className="btn-gradient w-full rounded-xl py-3.5 text-sm font-semibold text-white
+                           disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                {loading ? (
+                  <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Verifying...</>
+                ) : 'Verify & Continue 🚀'}
+              </button>
+              <div className="text-center">
+                <button type="button" onClick={handleResend} disabled={resendCooldown > 0}
+                  className="text-sm text-slate-400 hover:text-purple-400 transition-colors disabled:text-slate-600 disabled:cursor-not-allowed">
+                  {resendCooldown > 0 ? `Resend OTP in ${resendCooldown}s` : "Didn't receive it? Resend OTP"}
+                </button>
+              </div>
+              <button type="button" onClick={() => { setStep(1); setOtp(''); setError(''); }}
+                className="w-full text-center text-xs text-slate-500 hover:text-slate-400 transition-colors">
+                ← Change email address
+              </button>
+            </form>
+          )}
 
-        {/* Footer link */}
-        <p className="mt-6 text-center text-sm text-slate-400">
-          Already have an account?{' '}
-          <Link href="/login" className="font-medium text-purple-400 hover:text-purple-300 transition-colors">
-            Login
-          </Link>
+          {/* Footer */}
+          {step === 1 && (
+            <p className="mt-6 text-center text-sm text-slate-500">
+              Already have an account?{' '}
+              <Link href="/login" className="text-purple-400 hover:text-purple-300 font-medium transition-colors">
+                Sign in
+              </Link>
+            </p>
+          )}
+        </div>
+
+        <p className="mt-4 text-center text-xs text-slate-600">
+          By signing up you agree to our Terms of Service and Privacy Policy.
         </p>
       </div>
     </div>

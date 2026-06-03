@@ -109,9 +109,21 @@ async def upload_resume(
     db.commit()
     db.refresh(new_resume)
 
-    # 6 — Return success
+    # 6 — Auto-trigger Gemini AI analysis (non-blocking, best-effort)
+    try:
+        from app.utils.gemini_client import analyze_resume as gemini_analyze
+        analysis = gemini_analyze(extracted_text)
+        new_resume.ai_suggestions = analysis
+        new_resume.ai_score = analysis.get("score")
+        new_resume.ats_keywords = analysis.get("ats_keywords") or []
+        db.commit()
+        db.refresh(new_resume)
+    except Exception:
+        pass  # AI analysis is best-effort; don't fail the upload
+
+    # 7 — Return success
     return ResumeUploadResponse(
-        message="Resume uploaded successfully!",
+        message="Resume uploaded and analysed successfully!",
         resume=ResumeData.model_validate(new_resume),
     )
 
@@ -435,4 +447,79 @@ def save_tailored_resume_endpoint(
         "resumeId": new_resume.id,
     }
 
+# ---------------------------------------------------------------------------
+# GET /api/resumes/{resume_id}/ai-analysis
+# ---------------------------------------------------------------------------
+@router.get(
+    "/{resume_id}/ai-analysis",
+    summary="Get cached Gemini AI analysis for a resume",
+)
+def get_ai_analysis(
+    resume_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Return the cached Gemini AI analysis for a resume.
+    Triggers fresh analysis if no cached result exists.
+    """
+    resume = (
+        db.query(Resume)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found.")
 
+    if resume.ai_suggestions:
+        return {"analysis": resume.ai_suggestions, "ai_score": resume.ai_score, "cached": True}
+
+    # Trigger fresh analysis
+    if not resume.extracted_text or not resume.extracted_text.strip():
+        raise HTTPException(status_code=400, detail="No text to analyse. Please re-upload.")
+
+    try:
+        from app.utils.gemini_client import analyze_resume as gemini_analyze
+        analysis = gemini_analyze(resume.extracted_text)
+        resume.ai_suggestions = analysis
+        resume.ai_score = analysis.get("score")
+        resume.ats_keywords = analysis.get("ats_keywords") or []
+        db.commit()
+        return {"analysis": analysis, "ai_score": resume.ai_score, "cached": False}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AI analysis failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/resumes/{resume_id}/ai-refresh
+# ---------------------------------------------------------------------------
+@router.post(
+    "/{resume_id}/ai-refresh",
+    summary="Force re-run Gemini AI analysis on a resume",
+)
+def refresh_ai_analysis(
+    resume_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Re-run Gemini AI analysis and update cached results."""
+    resume = (
+        db.query(Resume)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found.")
+    if not resume.extracted_text or not resume.extracted_text.strip():
+        raise HTTPException(status_code=400, detail="No text to analyse. Please re-upload.")
+
+    try:
+        from app.utils.gemini_client import analyze_resume as gemini_analyze
+        analysis = gemini_analyze(resume.extracted_text)
+        resume.ai_suggestions = analysis
+        resume.ai_score = analysis.get("score")
+        resume.ats_keywords = analysis.get("ats_keywords") or []
+        db.commit()
+        return {"analysis": analysis, "ai_score": resume.ai_score, "message": "Analysis refreshed."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AI analysis failed: {exc}")

@@ -1,45 +1,41 @@
 """
-user.py — SQLAlchemy User Model for SkillProof AI
+user.py — User SQLAlchemy Model for SkillProof AI
 
-Maps the `users` table used for authentication and profile storage.
+Includes OTP-based email verification, login tracking,
+and all relationship back-refs required by child models.
 """
 
 from datetime import datetime
-
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from sqlalchemy.orm import relationship
-
 from app.database import Base
 
 
 class User(Base):
-    """
-    Represents a registered user in the SkillProof AI platform.
-
-    Columns:
-        id:              Auto-incrementing primary key.
-        full_name:       User's display name (max 100 chars).
-        email:           Unique email address used for login.
-        hashed_password: Bcrypt hash — the plain-text password is never stored.
-        created_at:      Timestamp set automatically when the row is created.
-    """
-
     __tablename__ = "users"
 
-    id: int = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    full_name: str = Column(String(100), nullable=False)
-    email: str = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password: str = Column(String(255), nullable=False)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String(120), nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
 
-    # --- Relationships ---
-    resumes = relationship("Resume", back_populates="user", cascade="all, delete-orphan")
+    # ── Email OTP Verification ──────────────────────────────────────────────
+    is_verified = Column(Boolean, default=False, nullable=False)
+    otp_code = Column(String(10), nullable=True)
+    otp_expiry = Column(DateTime, nullable=True)
+    otp_resend_count = Column(Integer, default=0)
+    otp_resend_window_start = Column(DateTime, nullable=True)
+
+    # ── Login Tracking ─────────────────────────────────────────────────────
+    last_login_at = Column(DateTime, nullable=True)
+    login_count = Column(Integer, default=0)
+
+    # ── Timestamps ─────────────────────────────────────────────────────────
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # ── Back-references required by child models ────────────────────────────
     jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
     match_results = relationship("MatchResult", back_populates="user", cascade="all, delete-orphan")
     applications = relationship("Application", back_populates="user", cascade="all, delete-orphan")
-    user_profile = relationship("UserProfile", uselist=False, back_populates="user", cascade="all, delete-orphan")
-    profile_analyses = relationship("ProfileAnalysis", back_populates="user", cascade="all, delete-orphan")
-
-    def __repr__(self) -> str:
-        """Developer-friendly representation of a User row."""
-        return f"<User id={self.id} email={self.email!r}>"
+    user_profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")

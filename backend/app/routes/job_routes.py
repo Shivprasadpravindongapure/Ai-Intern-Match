@@ -182,36 +182,86 @@ def delete_job(
 
 
 # ---------------------------------------------------------------------------
-# GET /api/jobs/discover (Daily Discovery & Aggregation Engine)
+# GET /api/jobs/discover/search (Real-time Job Discovery via JSearch API)
 # ---------------------------------------------------------------------------
 @router.get(
     "/discover/search",
-    summary="Discover dynamic daily internship and job postings from LinkedIn, Indeed, and Naukri",
+    summary="Search real job listings from LinkedIn, Indeed, Glassdoor via JSearch API",
 )
 def discover_jobs_endpoint(
     title: str = "",
-    mode: str = "all",
-    type: str = "all",
+    location: str = "India",
+    job_type: str = "all",
+    work_mode: str = "all",
     source: str = "all",
+    page: int = 1,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
     """
-    Real-time discovery crawler aggregating new internship and job postings
-    daily from LinkedIn, Indeed, and Naukri. Filters by job mode (remote, hybrid, onsite)
-    and job type (internship, fulltime).
+    Fetches real-time job listings from JSearch RapidAPI (LinkedIn, Indeed, Glassdoor).
+    Computes AI match scores against the user's latest resume skills.
+    Results are cached for 30 minutes per query to respect API rate limits.
     """
-    from app.utils.job_aggregator import get_daily_discovered_jobs
+    from app.utils.job_aggregator import search_jobs
+    from app.models.resume import Resume
 
-    sources_list = ["linkedin", "indeed", "naukri"]
+    # Get user's resume skills for match scoring
+    user_skills = []
+    latest_resume = (
+        db.query(Resume)
+        .filter(Resume.user_id == current_user.id)
+        .order_by(Resume.created_at.desc())
+        .first()
+    )
+    if latest_resume and latest_resume.parsed_data:
+        user_skills = latest_resume.parsed_data.get("skills") or []
+
+    sources_list = None
     if source != "all":
         sources_list = [s.strip() for s in source.split(",") if s.strip()]
 
-    discovered = get_daily_discovered_jobs(
+    result = search_jobs(
         title=title,
-        mode=mode,
-        position_type=type,
+        location=location,
+        job_type=job_type,
+        work_mode=work_mode,
         sources=sources_list,
+        page=page,
+        user_skills=user_skills,
     )
 
-    return {"jobs": discovered}
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /api/jobs/discover/recommended (AI-Recommended Jobs by Resume Skills)
+# ---------------------------------------------------------------------------
+@router.get(
+    "/discover/recommended",
+    summary="Get AI-recommended jobs based on the user's latest resume skills",
+)
+def recommended_jobs(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Fetches job listings tailored to the user's top skills from their latest resume.
+    Returns up to 6 best-matching jobs.
+    """
+    from app.utils.job_aggregator import get_recommended_jobs
+    from app.models.resume import Resume
+
+    user_skills = []
+    latest_resume = (
+        db.query(Resume)
+        .filter(Resume.user_id == current_user.id)
+        .order_by(Resume.created_at.desc())
+        .first()
+    )
+    if latest_resume and latest_resume.parsed_data:
+        user_skills = latest_resume.parsed_data.get("skills") or []
+
+    jobs = get_recommended_jobs(user_skills=user_skills)
+    return {"jobs": jobs, "based_on_skills": user_skills[:5]}
 

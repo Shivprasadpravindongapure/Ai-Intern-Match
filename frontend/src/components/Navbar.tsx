@@ -11,11 +11,12 @@ const navLinks = [
   { href: '/upload-resume', label: 'Upload Resume' },
   { href: '/resumes', label: 'My Resumes' },
   { href: '/jobs/discover', label: 'Discover Jobs' },
-  { href: '/jobs/new', label: 'Add Job' },
-  { href: '/jobs', label: 'My Jobs' },
   { href: '/applications', label: 'Applications' },
-  { href: '/profile/connect', label: 'Profiles' },
+  { href: '/ai-studio', label: '🧠 AI Studio' },
+  { href: '/automate', label: '🚀 Autopilot' },
+  { href: '/profile/connect', label: 'Profile' },
 ];
+
 
 export default function Navbar() {
   const { user, loading, logout } = useAuth();
